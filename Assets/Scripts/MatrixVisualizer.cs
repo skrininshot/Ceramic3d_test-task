@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 
 public class MatrixVisualizerCubes : MonoBehaviour
@@ -6,6 +7,8 @@ public class MatrixVisualizerCubes : MonoBehaviour
     // Путь к файлам
     public string modelFileName = "model.json";
     public string spaceFileName = "space.json";
+    public string offsetExportFileName = "offsetExport.json";
+    public float tolerance = 0.0001f;
 
     // Цвета и настройки кубов
     public Color modelCubeColor = Color.blue;
@@ -30,11 +33,12 @@ public class MatrixVisualizerCubes : MonoBehaviour
         _transform = transform;
         
         // Формируем полные пути к файлам в StreamingAssets
-        string modelPath = System.IO.Path.Combine(Application.streamingAssetsPath, modelFileName);
-        string spacePath = System.IO.Path.Combine(Application.streamingAssetsPath, spaceFileName);
+        string modelPath = Path.Combine(Application.streamingAssetsPath, modelFileName);
+        string spacePath = Path.Combine(Application.streamingAssetsPath, spaceFileName);
+        string exportPath = Path.Combine(Application.streamingAssetsPath, offsetExportFileName);
 
-        matcher = new MatrixMatcher(modelPath, spacePath, 0.0001f);
-        matcher.LoadMatrices();
+        matcher = new MatrixMatcher(modelPath, spacePath, tolerance);
+        matcher.LoadMatrices(exportPath);
 
         // Генерируем кандидатов и валидные смещения (если нужно, можно их использовать для логики)
         List<Vector3> candidates = matcher.GenerateCandidateOffsets();

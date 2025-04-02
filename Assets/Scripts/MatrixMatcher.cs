@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Newtonsoft.Json;
 using UnityEngine;
 
 public class MatrixMatcher
@@ -19,7 +20,7 @@ public class MatrixMatcher
         this.spaceFilePath = spaceFilePath;
         this.tolerance = tolerance;
     }
-
+    
     // Метод загрузки матриц из файлов
     public void LoadMatrices()
     {
@@ -44,6 +45,17 @@ public class MatrixMatcher
         {
             Debug.LogError("Файл пространства не найден: " + spaceFilePath);
         }
+    }
+    
+    // Метод загрузки матриц из файлов и экспорта найденных смещений
+    public void LoadMatrices(string exportFilePath)
+    {
+        LoadMatrices();
+
+        List<Vector3> candidates = GenerateCandidateOffsets();
+        List<Vector3> validOffsets = ValidateOffsets(candidates);
+        
+        ExportOffsetsToJson(validOffsets, exportFilePath);
     }
 
     // Парсинг JSON-массива матриц
@@ -135,6 +147,35 @@ public class MatrixMatcher
                 return true;
         }
         return false;
+    }
+
+    // Метод для экспорта смещений в JSON-файл
+    private void ExportOffsetsToJson(List<Vector3> offsets, string outputPath)
+    {
+        if (offsets == null || offsets.Count == 0)
+        {
+            Debug.LogError("Список смещений пуст. Нечего экспортировать.");
+            return;
+        }
+        
+        try
+        {
+            var jsonOffsets = offsets.ConvertAll(offset => new
+            {
+                x = offset.x,
+                y = offset.y,
+                z = offset.z
+            });
+            
+            string json = JsonConvert.SerializeObject(jsonOffsets, Formatting.Indented);
+
+            File.WriteAllText(outputPath, json);
+            Debug.Log("Смещения успешно экспортированы в файл: " + outputPath);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("Ошибка при экспорте смещений в JSON: " + e.Message);
+        }
     }
 }
 
@@ -235,4 +276,4 @@ public struct Matrix3x3
                Mathf.Abs(a21 - other.a21) <= tol &&
                Mathf.Abs(a22 - other.a22) <= tol;
     }
-}
+}    
