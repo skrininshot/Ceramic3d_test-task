@@ -1,0 +1,24 @@
+# Игнорируем системные файлы
+.DS_Store
+Thumbs.db
+
+# Unity
+Library/
+Logs/
+Temp/
+obj/
+Build/
+Builds/
+UserSettings/
+Packages/
+ProjectSettings/UnityConnectSettings.asset
+*.sln
+*.csproj
+
+# Visual Studio / JetBrains Rider
+.vscode/
+.idea/
+*.suo
+*.user
+*.unityproj
+*.pidb
