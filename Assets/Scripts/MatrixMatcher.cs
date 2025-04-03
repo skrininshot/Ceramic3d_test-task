@@ -6,7 +6,7 @@ using UnityEngine;
 
 public class MatrixMatcher
 {
-    public float tolerance = 0.0001f;
+    public float tolerance = 0.01f;  // Допуск для сравнения элементов матриц
 
     private List<MatrixData> modelMatrices = new List<MatrixData>();
     private List<MatrixData> spaceMatrices = new List<MatrixData>();
@@ -14,14 +14,14 @@ public class MatrixMatcher
     private string modelFilePath;
     private string spaceFilePath;
 
-    public MatrixMatcher(string modelFilePath, string spaceFilePath, float tolerance = 0.0001f)
+    public MatrixMatcher(string modelFilePath, string spaceFilePath, float tolerance = 0.01f)
     {
         this.modelFilePath = modelFilePath;
         this.spaceFilePath = spaceFilePath;
         this.tolerance = tolerance;
     }
-    
-    // Метод загрузки матриц из файлов
+
+    // Загрузка матриц из JSON-файлов
     public void LoadMatrices()
     {
         if (File.Exists(modelFilePath))
@@ -46,19 +46,8 @@ public class MatrixMatcher
             Debug.LogError("Файл пространства не найден: " + spaceFilePath);
         }
     }
-    
-    // Метод загрузки матриц из файлов и экспорта найденных смещений
-    public void LoadMatrices(string exportFilePath)
-    {
-        LoadMatrices();
 
-        List<Vector3> candidates = GenerateCandidateOffsets();
-        List<Vector3> validOffsets = ValidateOffsets(candidates);
-        
-        ExportOffsetsToJson(validOffsets, exportFilePath);
-    }
-
-    // Парсинг JSON-массива матриц
+    // Парсинг JSON-массива матриц (формат как в исходном файле)
     private List<MatrixData> ParseMatrixData(string json)
     {
         string wrappedJson = "{\"matrices\":" + json + "}";
@@ -66,50 +55,66 @@ public class MatrixMatcher
         return new List<MatrixData>(wrapper.matrices);
     }
 
-    // Генерация кандидатов смещений для матриц с совпадающими R-блоками
-    public List<Vector3> GenerateCandidateOffsets()
+    // Публичные методы для получения списков матриц
+    public List<MatrixData> GetModelMatrices()
     {
-        List<Vector3> candidates = new List<Vector3>();
+        return modelMatrices;
+    }
+    public List<MatrixData> GetSpaceMatrices()
+    {
+        return spaceMatrices;
+    }
 
-        foreach (var m in modelMatrices)
+    // Генерация кандидатных смещений в виде 4x4 матриц, используя опорную матрицу модели (первую)
+    public List<Matrix4x4> GenerateCandidateOffsets()
+    {
+        List<Matrix4x4> candidates = new List<Matrix4x4>();
+        if (modelMatrices.Count == 0)
         {
-            Matrix3x3 R_model = m.GetRotationBlock();
-            Vector3 t_model = m.GetTranslation();
+            Debug.LogError("Нет матриц модели.");
+            return candidates;
+        }
 
-            foreach (var s in spaceMatrices)
+        // Опорная матрица модели
+        MatrixData refMatrixData = modelMatrices[0];
+        Matrix4x4 M_ref = refMatrixData.ToMatrix4x4();
+
+        foreach (var s in spaceMatrices)
+        {
+            Matrix4x4 S = s.ToMatrix4x4();
+            // Если сравниваем только вращательный блок (верхние 3x3)
+            if (Matrix3x3ApproximatelyEquals(M_ref, S, tolerance))
             {
-                Matrix3x3 R_space = s.GetRotationBlock();
-                if (R_model.ApproximatelyEquals(R_space, tolerance))
+                Matrix4x4 invM = M_ref.inverse;
+                Matrix4x4 candidate = S * invM;
+                // Добавляем кандидата, если он не похож на уже найденных
+                if (!ContainsCandidate(candidates, candidate, tolerance))
                 {
-                    Vector3 t_space = s.GetTranslation();
-                    Vector3 candidate = t_space - t_model;
-                    if (!ContainsCandidate(candidates, candidate, tolerance))
-                    {
-                        candidates.Add(candidate);
-                    }
+                    candidates.Add(candidate);
                 }
             }
         }
-        Debug.Log("Сгенерировано кандидатов: " + candidates.Count);
+        Debug.Log("Сгенерировано кандидатных смещений (матриц): " + candidates.Count);
         return candidates;
     }
 
-    // Проверка кандидатов смещений: для каждой матрицы модели должно находиться соответствие в пространстве.
-    public List<Vector3> ValidateOffsets(List<Vector3> candidates)
+    // Валидация кандидатных смещений: проверяем, что для каждой матрицы модели T * M ≈ S для хотя бы одной S
+    public List<Matrix4x4> ValidateOffsets(List<Matrix4x4> candidates)
     {
-        List<Vector3> valid = new List<Vector3>();
-        foreach (var candidate in candidates)
+        List<Matrix4x4> valid = new List<Matrix4x4>();
+
+        foreach (var T_candidate in candidates)
         {
             bool candidateValid = true;
             foreach (var m in modelMatrices)
             {
-                Matrix3x3 R_model = m.GetRotationBlock();
-                Vector3 expectedT = m.GetTranslation() + candidate;
+                Matrix4x4 M = m.ToMatrix4x4();
+                Matrix4x4 transformed = T_candidate * M;
                 bool foundMatch = false;
                 foreach (var s in spaceMatrices)
                 {
-                    if (R_model.ApproximatelyEquals(s.GetRotationBlock(), tolerance) &&
-                        ApproximatelyEqual(expectedT, s.GetTranslation(), tolerance))
+                    Matrix4x4 S = s.ToMatrix4x4();
+                    if (MatrixApproximatelyEqual(transformed, S, tolerance))
                     {
                         foundMatch = true;
                         break;
@@ -122,35 +127,51 @@ public class MatrixMatcher
                 }
             }
             if (candidateValid)
-                valid.Add(candidate);
+                valid.Add(T_candidate);
         }
+        Debug.Log("Валидных смещений (матриц) найдено: " + valid.Count);
         return valid;
     }
 
-    // Геттеры
-    public List<MatrixData> GetModelMatrices() { return modelMatrices; }
-    public List<MatrixData> GetSpaceMatrices() { return spaceMatrices; }
-
-    // Вспомогательная функция сравнения векторов с допуском
-    private bool ApproximatelyEqual(Vector3 a, Vector3 b, float tol)
+    // Проверка, содержится ли уже похожая кандидатная матрица в списке (сравнение всех 16 элементов)
+    private bool ContainsCandidate(List<Matrix4x4> list, Matrix4x4 candidate, float tol)
     {
-        return Mathf.Abs(a.x - b.x) <= tol &&
-               Mathf.Abs(a.y - b.y) <= tol &&
-               Mathf.Abs(a.z - b.z) <= tol;
-    }
-
-    private bool ContainsCandidate(List<Vector3> list, Vector3 candidate, float tol)
-    {
-        foreach (var c in list)
+        foreach (var mat in list)
         {
-            if (ApproximatelyEqual(c, candidate, tol))
+            if (MatrixApproximatelyEqual(mat, candidate, tol))
                 return true;
         }
         return false;
     }
 
-    // Метод для экспорта смещений в JSON-файл
-    private void ExportOffsetsToJson(List<Vector3> offsets, string outputPath)
+    // Сравнение двух 4x4 матриц по всем элементам с заданным допуском
+    private bool MatrixApproximatelyEqual(Matrix4x4 A, Matrix4x4 B, float tol)
+    {
+        for (int i = 0; i < 16; i++)
+        {
+            if (Mathf.Abs(A[i] - B[i]) > tol)
+                return false;
+        }
+        return true;
+    }
+
+    // Сравнение только верхних 3x3 блоков двух 4x4 матриц
+    private bool Matrix3x3ApproximatelyEquals(Matrix4x4 A, Matrix4x4 B, float tol)
+    {
+        if (Mathf.Abs(A.m00 - B.m00) > tol) return false;
+        if (Mathf.Abs(A.m01 - B.m01) > tol) return false;
+        if (Mathf.Abs(A.m02 - B.m02) > tol) return false;
+        if (Mathf.Abs(A.m10 - B.m10) > tol) return false;
+        if (Mathf.Abs(A.m11 - B.m11) > tol) return false;
+        if (Mathf.Abs(A.m12 - B.m12) > tol) return false;
+        if (Mathf.Abs(A.m20 - B.m20) > tol) return false;
+        if (Mathf.Abs(A.m21 - B.m21) > tol) return false;
+        if (Mathf.Abs(A.m22 - B.m22) > tol) return false;
+        return true;
+    }
+
+    // Экспорт валидных смещений в JSON (каждая смещающая матрица экспортируется целиком)
+    public void ExportOffsetsToJson(List<Matrix4x4> offsets, string outputPath)
     {
         if (offsets == null || offsets.Count == 0)
         {
@@ -158,35 +179,19 @@ public class MatrixMatcher
             return;
         }
         
-        try
+        List<ExportMatrix> exportList = new List<ExportMatrix>();
+        foreach (var m in offsets)
         {
-            var jsonOffsets = offsets.ConvertAll(offset => new
-            {
-                x = offset.x,
-                y = offset.y,
-                z = offset.z
-            });
-            
-            string json = JsonConvert.SerializeObject(jsonOffsets, Formatting.Indented);
+            exportList.Add(new ExportMatrix(m));
+        }
 
-            File.WriteAllText(outputPath, json);
-            Debug.Log("Смещения успешно экспортированы в файл: " + outputPath);
-        }
-        catch (Exception e)
-        {
-            Debug.LogError("Ошибка при экспорте смещений в JSON: " + e.Message);
-        }
+        string json = JsonConvert.SerializeObject(exportList, Formatting.Indented);
+        File.WriteAllText(outputPath, json);
+        Debug.Log("Смещения успешно экспортированы в файл: " + outputPath);
     }
 }
 
-// Обертка для JSON-парсинга
-[Serializable]
-public class MatrixDataListWrapper
-{
-    public MatrixData[] matrices;
-}
-
-// Класс для хранения данных одной 4x4 матрицы
+// Класс для хранения данных одной 4x4 матрицы, как в исходном формате
 [Serializable]
 public class MatrixData
 {
@@ -195,85 +200,38 @@ public class MatrixData
     public float m02, m12, m22, m32;
     public float m03, m13, m23, m33;
 
-    public Matrix3x3 GetRotationBlock()
+    public Matrix4x4 ToMatrix4x4()
     {
-        return new Matrix3x3(m00, m01, m02,
-            m10, m11, m12,
-            m20, m21, m22);
-    }
-
-    public Vector3 GetTranslation()
-    {
-        return new Vector3(m03, m13, m23);
-    }
-
-    public Quaternion GetRotationQuaternion()
-    {
-        Matrix3x3 R = GetRotationBlock();
-        float trace = R.a00 + R.a11 + R.a22;
-        float w, x, y, z;
-        if (trace > 0)
-        {
-            float s = Mathf.Sqrt(trace + 1.0f) * 2f; 
-            w = 0.25f * s;
-            x = (R.a21 - R.a12) / s;
-            y = (R.a02 - R.a20) / s;
-            z = (R.a10 - R.a01) / s;
-        }
-        else if ((R.a00 > R.a11) && (R.a00 > R.a22))
-        {
-            float s = Mathf.Sqrt(1.0f + R.a00 - R.a11 - R.a22) * 2f;
-            w = (R.a21 - R.a12) / s;
-            x = 0.25f * s;
-            y = (R.a01 + R.a10) / s;
-            z = (R.a02 + R.a20) / s;
-        }
-        else if (R.a11 > R.a22)
-        {
-            float s = Mathf.Sqrt(1.0f + R.a11 - R.a00 - R.a22) * 2f;
-            w = (R.a02 - R.a20) / s;
-            x = (R.a01 + R.a10) / s;
-            y = 0.25f * s;
-            z = (R.a12 + R.a21) / s;
-        }
-        else
-        {
-            float s = Mathf.Sqrt(1.0f + R.a22 - R.a00 - R.a11) * 2f;
-            w = (R.a10 - R.a01) / s;
-            x = (R.a02 + R.a20) / s;
-            y = (R.a12 + R.a21) / s;
-            z = 0.25f * s;
-        }
-        return new Quaternion(x, y, z, w);
+        Matrix4x4 mat = new Matrix4x4();
+        mat.m00 = m00; mat.m01 = m01; mat.m02 = m02; mat.m03 = m03;
+        mat.m10 = m10; mat.m11 = m11; mat.m12 = m12; mat.m13 = m13;
+        mat.m20 = m20; mat.m21 = m21; mat.m22 = m22; mat.m23 = m23;
+        mat.m30 = m30; mat.m31 = m31; mat.m32 = m32; mat.m33 = m33;
+        return mat;
     }
 }
 
-// Структура для представления 3x3 матрицы
-public struct Matrix3x3
+// Обертка для JSON-парсинга массива матриц
+[Serializable]
+public class MatrixDataListWrapper
 {
-    public float a00, a01, a02;
-    public float a10, a11, a12;
-    public float a20, a21, a22;
+    public MatrixData[] matrices;
+}
 
-    public Matrix3x3(float a00, float a01, float a02,
-                     float a10, float a11, float a12,
-                     float a20, float a21, float a22)
-    {
-        this.a00 = a00; this.a01 = a01; this.a02 = a02;
-        this.a10 = a10; this.a11 = a11; this.a12 = a12;
-        this.a20 = a20; this.a21 = a21; this.a22 = a22;
-    }
+// Класс для экспорта матрицы в JSON
+[Serializable]
+public class ExportMatrix
+{
+    public float e00, e01, e02, e03;
+    public float e10, e11, e12, e13;
+    public float e20, e21, e22, e23;
+    public float e30, e31, e32, e33;
 
-    public bool ApproximatelyEquals(Matrix3x3 other, float tol)
+    public ExportMatrix(Matrix4x4 mat)
     {
-        return Mathf.Abs(a00 - other.a00) <= tol &&
-               Mathf.Abs(a01 - other.a01) <= tol &&
-               Mathf.Abs(a02 - other.a02) <= tol &&
-               Mathf.Abs(a10 - other.a10) <= tol &&
-               Mathf.Abs(a11 - other.a11) <= tol &&
-               Mathf.Abs(a12 - other.a12) <= tol &&
-               Mathf.Abs(a20 - other.a20) <= tol &&
-               Mathf.Abs(a21 - other.a21) <= tol &&
-               Mathf.Abs(a22 - other.a22) <= tol;
+        e00 = mat.m00; e01 = mat.m01; e02 = mat.m02; e03 = mat.m03;
+        e10 = mat.m10; e11 = mat.m11; e12 = mat.m12; e13 = mat.m13;
+        e20 = mat.m20; e21 = mat.m21; e22 = mat.m22; e23 = mat.m23;
+        e30 = mat.m30; e31 = mat.m31; e32 = mat.m32; e33 = mat.m33;
     }
-}    
+}

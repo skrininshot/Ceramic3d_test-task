@@ -1,14 +1,13 @@
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
+using UnityEngine.Serialization;
 
-public class MatrixVisualizerCubes : MonoBehaviour
+public class MatrixVisualizer : MonoBehaviour
 {
-    // Путь к файлам
-    public string modelFileName = "model.json";
-    public string spaceFileName = "space.json";
-    public string offsetExportFileName = "offsetExport.json";
-    public float tolerance = 0.0001f;
+    // Параметры допусков (элементы матрицы)
+    public float tolerance = 0.01f;
+    public int selectedOffsetIndex = 0;
 
     // Цвета и настройки кубов
     public Color modelCubeColor = Color.blue;
@@ -16,91 +15,124 @@ public class MatrixVisualizerCubes : MonoBehaviour
     public Color spaceCubeColor = Color.white;
     public Vector3 cubeScale = new Vector3(0.5f, 0.5f, 0.5f);
 
-    public int selectedOffsetIndex = 0;
+    // Имена файлов (StreamingAssets)
+    public string modelFileName = "model.json";
+    public string spaceFileName = "space.json";
+    public string offsetExportFileName = "offsetExport.json";
 
     // Списки созданных кубов
     private List<GameObject> modelCubes = new List<GameObject>();
     private List<GameObject> transformedCubes = new List<GameObject>();
     private List<GameObject> spaceCubes = new List<GameObject>();
 
-    // Экземпляр MatrixMatcher
-    private MatrixMatcher matcher;
-
+    // Наш новый экземпляр класса, работающего с полными матрицами
+    private MatrixMatcher matrixMatcher;
     private Transform _transform;
 
-    private void Start()
+    void Start()
     {
         _transform = transform;
-        
-        // Формируем полные пути к файлам в StreamingAssets
+
+        // Формирование путей
         string modelPath = Path.Combine(Application.streamingAssetsPath, modelFileName);
         string spacePath = Path.Combine(Application.streamingAssetsPath, spaceFileName);
         string exportPath = Path.Combine(Application.streamingAssetsPath, offsetExportFileName);
 
-        matcher = new MatrixMatcher(modelPath, spacePath, tolerance);
-        matcher.LoadMatrices(exportPath);
+        // Создаем экземпляр нового класса (с elementTolerance)
+        matrixMatcher = new MatrixMatcher(modelPath, spacePath, tolerance);
+        matrixMatcher.LoadMatrices();
 
-        // Генерируем кандидатов и валидные смещения (если нужно, можно их использовать для логики)
-        List<Vector3> candidates = matcher.GenerateCandidateOffsets();
-        List<Vector3> validOffsets = matcher.ValidateOffsets(candidates);
+        // Генерируем кандидатные смещения (полные 4x4 матрицы)
+        List<Matrix4x4> candidates = matrixMatcher.GenerateCandidateOffsets();
+        List<Matrix4x4> validOffsets = matrixMatcher.ValidateOffsets(candidates);
 
         if (validOffsets.Count > 0)
-            Debug.Log("Найдено валидных смещений: " + validOffsets.Count);
+        {
+            Debug.Log("Найдено валидных смещений (матриц): " + validOffsets.Count);
+            // Экспорт валидных смещений, если требуется
+            matrixMatcher.ExportOffsetsToJson(validOffsets, exportPath);
+        }
         else
+        {
             Debug.LogWarning("Валидные смещения не найдены");
+        }
 
-        // Создаем кубы для визуализации
-        CreateCubes(validOffsets);
+        // Визуализируем исходные матрицы модели
+        CreateModelCubes();
+        // Визуализируем трансформированные матрицы модели, если найден хотя бы один кандидат
+        if (validOffsets.Count > 0 && selectedOffsetIndex < validOffsets.Count)
+        {
+            Matrix4x4 offsetMatrix = validOffsets[selectedOffsetIndex];
+            CreateTransformedCubes(offsetMatrix);
+        }
+        // Визуализируем матрицы пространства
+        CreateSpaceCubes();
     }
 
-    private void CreateCubes(List<Vector3> validOffsets)
+    // Создаем кубы для матриц модели (исходные)
+    private void CreateModelCubes()
     {
         ClearCubes(modelCubes);
-        ClearCubes(transformedCubes);
-        ClearCubes(spaceCubes);
-
-        // Создаем кубы для матриц модели с вращением
-        foreach (var m in matcher.GetModelMatrices())
+        foreach (var mData in matrixMatcher.GetModelMatrices())
         {
-            Vector3 pos = m.GetTranslation();
+            Matrix4x4 M = mData.ToMatrix4x4();
+            Vector3 pos = M.GetColumn(3);
+            Quaternion rot = GetRotationFromMatrix(M);
             GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
             cube.transform.SetParent(_transform);
             cube.transform.position = pos;
+            cube.transform.rotation = rot;
             cube.transform.localScale = cubeScale;
-            cube.transform.rotation = m.GetRotationQuaternion();
             SetColor(cube, modelCubeColor);
             modelCubes.Add(cube);
         }
+    }
 
-        // Создаем кубы для матриц модели после применения смещения
-        if (validOffsets != null && validOffsets.Count > 0 && selectedOffsetIndex < validOffsets.Count)
+    // Создаем кубы для трансформированных матриц модели (применив смещение)
+    private void CreateTransformedCubes(Matrix4x4 offsetMatrix)
+    {
+        ClearCubes(transformedCubes);
+        foreach (var mData in matrixMatcher.GetModelMatrices())
         {
-            Vector3 offset = validOffsets[selectedOffsetIndex];
-            foreach (var m in matcher.GetModelMatrices())
-            {
-                Vector3 pos = m.GetTranslation() + offset;
-                GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                cube.transform.SetParent(_transform);
-                cube.transform.position = pos;
-                cube.transform.localScale = cubeScale;
-                cube.transform.rotation = m.GetRotationQuaternion();
-                SetColor(cube, transformedCubeColor);
-                transformedCubes.Add(cube);
-            }
-        }
-
-        // Создаем кубы для матриц пространства с вращением
-        foreach (var s in matcher.GetSpaceMatrices())
-        {
-            Vector3 pos = s.GetTranslation();
+            Matrix4x4 M = mData.ToMatrix4x4();
+            // Вычисляем новое преобразование: T_candidate * M
+            Matrix4x4 transformed = offsetMatrix * M;
+            Vector3 pos = transformed.GetColumn(3);
+            Quaternion rot = GetRotationFromMatrix(transformed);
             GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
             cube.transform.SetParent(_transform);
             cube.transform.position = pos;
+            cube.transform.rotation = rot;
+            cube.transform.localScale = cubeScale;
+            SetColor(cube, transformedCubeColor);
+            transformedCubes.Add(cube);
+        }
+    }
+
+    // Создаем кубы для матриц пространства
+    private void CreateSpaceCubes()
+    {
+        ClearCubes(spaceCubes);
+        foreach (var sData in matrixMatcher.GetSpaceMatrices())
+        {
+            Matrix4x4 S = sData.ToMatrix4x4();
+            Vector3 pos = S.GetColumn(3);
+            Quaternion rot = GetRotationFromMatrix(S);
+            GameObject cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            cube.transform.SetParent(_transform);
+            cube.transform.position = pos;
+            cube.transform.rotation = rot;
             cube.transform.localScale = cubeScale * 0.7f;
-            cube.transform.rotation = s.GetRotationQuaternion();
             SetColor(cube, spaceCubeColor);
             spaceCubes.Add(cube);
         }
+    }
+
+    // Простой способ получить Quaternion из матрицы (используем столбцы 2 и 1)
+    private Quaternion GetRotationFromMatrix(Matrix4x4 m)
+    {
+        // Предполагается, что матрица корректно представляет преобразование
+        return Quaternion.LookRotation(m.GetColumn(2), m.GetColumn(1));
     }
 
     private void SetColor(GameObject cube, Color color)

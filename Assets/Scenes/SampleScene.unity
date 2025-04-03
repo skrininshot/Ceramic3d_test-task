@@ -151,15 +151,15 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 40785c09af965b14998e590f98df0b6e, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  modelFileName: model.json
-  spaceFileName: space.json
-  offsetExportFileName: offsetExport.json
-  tolerance: 0.0001
+  tolerance: 10
+  selectedOffsetIndex: 0
   modelCubeColor: {r: 0, g: 0, b: 1, a: 1}
   transformedCubeColor: {r: 0, g: 1, b: 0, a: 1}
   spaceCubeColor: {r: 1, g: 1, b: 1, a: 1}
   cubeScale: {x: 1.25, y: 1.25, z: 1.25}
-  selectedOffsetIndex: 0
+  modelFileName: model.json
+  spaceFileName: space.json
+  offsetExportFileName: offsetExport.json
 --- !u!4 &192815217
 Transform:
   m_ObjectHideFlags: 0
